@@ -1,0 +1,5 @@
+[console_scripts]
+bigkuery = bigkuery.__main__:main
+
+[gui_scripts]
+bigkuery-gui = bigkuery.__main__:main
