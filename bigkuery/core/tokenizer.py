@@ -186,13 +186,15 @@ class Tokenizer:
     
     def next_token(self) -> Token:
         """Get the next token."""
+        # Return peeked token if available
         if self._peeked is not None:
             token = self._peeked
             self._peeked = None
             self._last_token = token
             return token
         
-        # Check for implicit multiplication
+        # Check for implicit multiplication BEFORE skipping whitespace
+        # This handles cases like '2x' or '(x)(y)' by inserting a '*' token
         if self._implicit_mult and self._needs_implicit_multiply():
             token = Token(TokenType.MULTIPLY, "*", self._pos, 0)
             self._last_token = token
@@ -203,6 +205,7 @@ class Tokenizer:
         if self._at_end():
             return Token(TokenType.END_OF_INPUT, "", self._pos, 0)
         
+        # Parse the next actual token from the string
         token = self._read_token()
         self._last_token = token
         return token
@@ -359,12 +362,13 @@ class Tokenizer:
     
     def _needs_implicit_multiply(self) -> bool:
         """Check if implicit multiplication should be inserted."""
+        # We need the previous token to decide
         if self._last_token is None:
             return False
         
         last_type = self._last_token.type
         
-        # Save position and check next token type
+        # Peek ahead to see the next character without consuming it
         saved_pos = self._pos
         self._skip_whitespace()
         
@@ -373,12 +377,12 @@ class Tokenizer:
         
         c = self._current()
         
-        # Determine what the next token would be
+        # Determine what the next token looks like it will be
         next_is_number = self._is_digit(c)
         next_is_identifier = self._is_identifier_start(c) or c in self.UNICODE_CONSTANTS
         next_is_left_paren = c == '('
         
-        # Restore position
+        # Restore position so we don't mess up actual tokenizing
         self._pos = saved_pos
         
         # Cases for implicit multiplication:
@@ -390,14 +394,18 @@ class Tokenizer:
         # 6. identifier followed by (: sin(x) is NOT implicit mult (it's function call)
         #    but x(2) is implicit mult
         
+        # Case 1 & 2: Number followed by var or (
         if last_type == TokenType.NUMBER:
             if next_is_identifier or next_is_left_paren:
                 return True
         
+        # Case 3, 4, 5: Closing paren followed by anything that can start a term
         if last_type == TokenType.RIGHT_PAREN:
             if next_is_number or next_is_identifier or next_is_left_paren:
                 return True
         
+        # Case 6: Variable followed by number (e.g., x2 -> x*2)
+        # Note: variable followed by ( is usually a function call, so we don't insert * there
         if last_type == TokenType.IDENTIFIER:
             # Only if not a function call
             if next_is_left_paren:

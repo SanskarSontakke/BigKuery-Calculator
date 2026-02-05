@@ -1,6 +1,6 @@
 # BigKuery Calculator
 
-An arbitrary precision scientific calculator built with Python and PyQt6.
+An arbitrary precision scientific calculator built with Python and PyQt6. It provides a robust engine for mathematical expression evaluation, supporting extremely high precision calculations, symbolic variables, and a wide range of functions.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.0+-green.svg)
@@ -8,16 +8,29 @@ An arbitrary precision scientific calculator built with Python and PyQt6.
 
 ## Features
 
-- **Arbitrary Precision Arithmetic** - Calculate with configurable precision (1-100 digits)
-- **Scientific Functions** - 50+ mathematical functions including:
-  - Trigonometric (sin, cos, tan, and inverses)
-  - Hyperbolic (sinh, cosh, tanh, and inverses)
-  - Exponential & Logarithmic (exp, log, ln, log10, log2)
-  - Special functions (gamma, factorial, gcd, lcm)
-- **Variables** - Assign and use variables (`x = 5`, `2*x + 1`)
-- **Constants** - Built-in constants (π, e, φ, τ, γ, ∞)
-- **Responsive UI** - Adapts to window size (tabs on small screens, combined layout on large)
-- **User-Friendly Errors** - Clear, actionable error messages
+- **Arbitrary Precision Arithmetic**:
+  - Calculate with configurable precision (default ~50 digits, up to 100+).
+  - Powered by `mpmath` for reliable high-precision floating-point operations.
+
+- **Advanced Mathematical Engine**:
+  - **Pratt Parser**: Handles operator precedence and associativity correctly.
+  - **Implicit Multiplication**: Supports natural syntax like `2x`, `3(x+1)`, and `(x+1)(x-1)`.
+  - **Scientific Functions**: Over 50 functions including:
+    - Trigonometric (sin, cos, tan, sec, csc, cot and inverses)
+    - Hyperbolic (sinh, cosh, tanh, etc.)
+    - Exponential & Logarithmic (exp, log, ln, log10, log2)
+    - Combinatorics (factorial, nCr, nPr, gamma)
+
+- **Variables & Constants**:
+  - Assign variables: `x = 5`, `result = 2*x + 10`
+  - Use previous result: `ans + 5`
+  - Built-in constants: `pi` (π), `e`, `phi` (φ), `tau` (τ), `euler` (γ), `inf` (∞)
+
+- **Modern User Interface**:
+  - **PyQt6 GUI**: Responsive and dark-themed.
+  - **Smart Input**: Syntax highlighting and multi-line support.
+  - **Formatted Output**: Clear error messages and precision-aware result formatting.
+  - **Keyboard Friendly**: Extensive shortcuts for efficiency.
 
 ## Installation
 
@@ -29,14 +42,15 @@ cd BigKuery-Calculator
 # Install dependencies
 pip install .
 
-# Or install with development dependencies
+# Or install with development dependencies (for testing)
 pip install .[dev]
 ```
 
 ## Usage
 
+To launch the calculator GUI:
+
 ```bash
-# Run the calculator
 python main.py
 ```
 
@@ -45,6 +59,7 @@ python main.py
 | Shortcut | Action |
 |----------|--------|
 | **Enter** | Evaluate expression |
+| **Shift+Enter** | Insert new line |
 | **Escape** | Clear input |
 | **F1** | Show function reference |
 | **Ctrl+L** | Clear input/output |
@@ -61,52 +76,79 @@ sqrt(2)            → 1.41421356...
 10!                → 3628800
 log(e^5)           → 5
 x = 10; x^2        → 100
+2(x+1)             → 22  (Implicit multiplication)
 ```
 
-## Project Structure
+## Architecture
+
+The application follows a modular architecture separating the core logic from the GUI.
+
+### Core (`bigkuery/core`)
+
+The calculation engine processes expressions in three stages:
+
+1.  **Tokenizer (`tokenizer.py`)**:
+    - Converts the input string into a stream of `Token` objects.
+    - Handles implicit multiplication detection (e.g., inserting `*` in `2x`).
+    - Recognizes numbers, identifiers, operators, and Unicode symbols.
+
+2.  **Parser (`parser.py`)**:
+    - Takes the token stream and builds an **Abstract Syntax Tree (AST)**.
+    - Uses a **Pratt Parser** (Top-Down Operator Precedence) to handle complex precedence rules (e.g., `*` before `+`, `^` is right-associative).
+    - Generates nodes like `BinaryOpNode`, `FunctionCallNode`, `AssignmentNode`, etc.
+
+3.  **Evaluator (`evaluator.py`)**:
+    - Traverses the AST recursively to compute the result.
+    - Uses `BigFloat` (wrapper around `mpmath.mpf`) for all numeric calculations to maintain high precision.
+    - Manages the `EvalContext`, which stores variables and settings (precision, angle mode).
+
+### GUI (`bigkuery/gui`)
+
+Built with PyQt6, utilizing a clean separation of concerns:
+
+- `MainWindow`: Orchestrates the application state.
+- `InputWidget`: Custom `QTextEdit` with specific input handling.
+- `OutputDisplay`: Renders results and errors.
+- `ButtonPanel`: Provides a clickable interface for common functions.
+
+## Development & Testing
+
+### Running Tests
+
+The project uses `pytest` for testing. To run the test suite:
+
+```bash
+# Install test dependencies
+pip install .[dev]
+
+# Run all tests
+pytest tests/ -v
+```
+
+### Project Structure
 
 ```
 BigKuery-Calculator/
 ├── bigkuery/
-│   ├── core/           # Core calculation engine
-│   │   ├── big_float.py       # Arbitrary precision float
-│   │   ├── big_rational.py    # Rational number support
-│   │   ├── tokenizer.py       # Expression tokenizer
-│   │   ├── parser.py          # Expression parser
-│   │   ├── evaluator.py       # Expression evaluator
-│   │   ├── math_functions.py  # Function registry
-│   │   └── error_messages.py  # User-friendly errors
-│   ├── gui/            # PyQt6 GUI components
-│   │   ├── main_window.py     # Main application window
-│   │   ├── button_panel.py    # Calculator buttons
-│   │   ├── input_widget.py    # Expression input
-│   │   ├── output_display.py  # Result display
-│   │   └── settings_dialog.py # Settings dialog
-│   └── __main__.py     # Application entry point
+│   ├── core/           # Logic: Tokenizer, Parser, Evaluator
+│   │   ├── big_float.py       # Arbitrary precision float wrapper
+│   │   ├── tokenizer.py       # Lexical analysis
+│   │   ├── parser.py          # AST generation
+│   │   ├── evaluator.py       # AST evaluation
+│   │   └── ...
+│   ├── gui/            # Interface: Windows, Widgets
+│   └── __main__.py     # Entry point
 ├── tests/              # Unit tests
-├── main.py             # Alternative entry point
-└── pyproject.toml      # Project configuration
+├── main.py             # Launcher script
+└── pyproject.toml      # Config
 ```
 
-## Development
+## Troubleshooting
 
-```bash
-# Install dev dependencies
-pip install .[dev]
-
-# Run tests
-pytest tests/ -v
-
-# Run the application
-python main.py
-```
-
-## Settings
-
-- **Precision**: Number of significant digits (default: 8)
-- **Angle Mode**: Degrees or Radians for trigonometric functions
-- **Result Format**: Scroll (one line) or Wrap (multiline)
-- **Export/Import**: Backup and restore settings as JSON
+-   **"Unknown function 'x' requires 2 arguments"**: You might be using a binary function like `pow` with only one argument. Check the help (F1) for signatures.
+-   **"Parse error: Unexpected token"**: Check for unmatched parentheses or mistyped operators.
+-   **"Cannot assign to constant"**: You tried to assign a value to `pi` or `e`. Use a different variable name.
+-   **Complex Numbers**: Currently, the calculator supports real numbers only. Operations resulting in complex numbers (like `sqrt(-1)`) will raise a domain error.
 
 ## License
 
