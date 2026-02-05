@@ -192,29 +192,36 @@ class Parser:
     
     def _parse_assignment(self) -> ASTNode:
         """Parse an assignment or expression."""
-        # Check for assignment: identifier = expression
+        # Try to parse as assignment: identifier = expression
+        # This requires lookahead because an identifier could start a regular expression too (e.g., "x + 1")
         if self._check(TokenType.IDENTIFIER):
             name = self._current.value
             saved_pos = self._tokenizer.position
             self._advance()
             
             if self._check(TokenType.EQUALS):
+                # Found "=", so it is an assignment
                 self._advance()
                 expr = self._parse_expression(0)
                 return AssignmentNode(name, expr)
             
-            # Not an assignment, backtrack
+            # Not an assignment, backtrack to start
+            # This is a bit expensive but robust
             self._tokenizer.reset()
             self._tokenizer._pos = 0
             self._tokenizer = Tokenizer(self._tokenizer.expression)
             self._advance()
         
+        # Parse as standard expression if not an assignment
         return self._parse_expression(0)
     
     def _parse_expression(self, min_precedence: int) -> ASTNode:
         """Parse expression with operator precedence."""
+        # Pratt Parsing (Top-Down Operator Precedence)
+        # 1. Parse the "nud" (Null Denotation) - usually a literal or prefix op
         left = self._parse_unary()
         
+        # 2. Loop while the next token has higher precedence than current context
         while True:
             if self._current is None or self._check(TokenType.END_OF_INPUT):
                 break
@@ -222,19 +229,22 @@ class Parser:
             if not self._current.is_binary_operator():
                 break
             
+            # Check precedence
             precedence = self._current.precedence()
             if precedence < min_precedence:
                 break
             
+            # Parse the "led" (Left Denotation) - usually an infix op
             op = self._current.value
             is_right_assoc = self._current.is_right_associative()
             self._advance()
             
-            # For right-associative operators, use same precedence
-            # For left-associative, use precedence + 1
+            # For right-associative operators (like ^), use same precedence to allow chaining
+            # For left-associative (like +), use precedence + 1 to force grouping
             next_min_prec = precedence if is_right_assoc else precedence + 1
             right = self._parse_expression(next_min_prec)
             
+            # Combine left and right into a new binary operation node
             left = BinaryOpNode(op, left, right)
         
         return left
@@ -264,31 +274,33 @@ class Parser:
     
     def _parse_primary(self) -> ASTNode:
         """Parse primary expressions (numbers, variables, functions, groups)."""
-        # Number
+        # Case 1: Number literal
         if self._check(TokenType.NUMBER):
             value = self._current.value
             self._advance()
             return NumberNode(value)
         
-        # Identifier (variable or function call)
+        # Case 2: Identifier (variable or function call)
         if self._check(TokenType.IDENTIFIER):
             name = self._current.value
             self._advance()
             
-            # Check for function call
+            # Look ahead for '(' to distinguish function calls from variables
             if self._check(TokenType.LEFT_PAREN):
                 return self._parse_function_call(name)
             
             return VariableNode(name)
         
-        # Parenthesized expression
+        # Case 3: Parenthesized expression (grouping)
         if self._check(TokenType.LEFT_PAREN):
             self._advance()
+            # Reset precedence counter for inside the parentheses
             expr = self._parse_expression(0)
             self._expect(TokenType.RIGHT_PAREN, "Expected ')'")
             return expr
         
-        # Absolute value |x|
+        # Case 4: Absolute value |x|
+        # Syntactic sugar for abs(x)
         if self._check(TokenType.PIPE):
             self._advance()
             expr = self._parse_expression(0)

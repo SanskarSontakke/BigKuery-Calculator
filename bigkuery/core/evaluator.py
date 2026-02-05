@@ -128,23 +128,29 @@ class Evaluator:
         Returns:
             EvalResult containing the value or error
         """
-        # Set precision
+        # Set global mpmath precision based on context
+        # This affects all subsequent arbitrary precision calculations
         mpmath.mp.prec = self._context.precision
         
         try:
+            # Step 1: Parse the string into an Abstract Syntax Tree (AST)
             if isinstance(expr, str):
                 if not expr.strip():
                     return EvalResult.from_error("Empty expression")
+                # Create parser and generate AST
                 parser = Parser(expr)
                 node = parser.parse()
             else:
+                # Already an AST node
                 node = expr
             
+            # Step 2: Recursively evaluate the AST
             result = self._evaluate_node(node)
             
+            # Step 3: Store result if valid
             if result.is_number and result.value is not None:
                 self._last_result = result.value
-                # Store as 'ans' variable
+                # Store as 'ans' variable for use in next calculation
                 self._context.set_variable("ans", result.value)
             
             return result
@@ -160,6 +166,8 @@ class Evaluator:
     
     def _evaluate_node(self, node: ASTNode) -> EvalResult:
         """Evaluate an AST node."""
+        # Dispatch evaluation to specific method based on node type
+        # This implements the Visitor pattern for AST traversal
         node_type = node.node_type()
         
         if node_type == NodeType.NUMBER:
@@ -257,7 +265,7 @@ class Evaluator:
     
     def _evaluate_function_call(self, node: FunctionCallNode) -> EvalResult:
         """Evaluate a function call."""
-        # Evaluate all arguments
+        # Step 1: Evaluate all arguments first (eager evaluation)
         args = []
         for arg_node in node.arguments:
             arg_result = self._evaluate_node(arg_node)
@@ -269,20 +277,22 @@ class Evaluator:
         num_args = len(args)
         
         try:
-            # Handle angle mode conversion for trig functions
+            # Step 2: Handle angle mode conversion for trig functions
+            # If in degrees mode, convert input to radians before calling trig functions
             if not self._context.radians_mode and name in (
                 'sin', 'cos', 'tan', 'cot', 'sec', 'csc'
             ) and num_args == 1:
                 # Convert degrees to radians
                 args[0] = MathFunctions.to_radians(args[0])
             
-            # Try to find the appropriate function
+            # Step 3: Dispatch to the appropriate function based on argument count
             if num_args == 1:
+                # Unary functions (1 argument)
                 func = MathFunctions.get_unary_function(name)
                 if func:
                     result = func(args[0])
                     
-                    # Convert back to degrees for inverse trig functions
+                    # Convert back to degrees for inverse trig functions if in degrees mode
                     if not self._context.radians_mode and name in (
                         'asin', 'acos', 'atan', 'acot', 'asec', 'acsc'
                     ):
@@ -297,12 +307,13 @@ class Evaluator:
                     )
             
             elif num_args == 2:
+                # Binary functions (2 arguments)
                 func = MathFunctions.get_binary_function(name)
                 if func:
                     result = func(args[0], args[1])
                     return EvalResult.from_value(result)
                 
-                # Special case: log with base
+                # Special case: log with base (log(x, base))
                 if name == 'log':
                     func = MathFunctions.get_binary_function('log')
                     if func:
@@ -310,6 +321,7 @@ class Evaluator:
                         return EvalResult.from_value(result)
             
             elif num_args == 3:
+                # Ternary functions (3 arguments)
                 func = MathFunctions.get_ternary_function(name)
                 if func:
                     result = func(args[0], args[1], args[2])
