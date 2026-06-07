@@ -133,6 +133,7 @@ class Tokenizer:
         'τ': 'tau',
         '∞': 'inf',
         'γ': 'euler',
+        '°': 'deg',
     }
     
     UNICODE_OPERATORS = {
@@ -298,11 +299,20 @@ class Tokenizer:
         
         # Read exponent part (scientific notation)
         if not self._at_end() and self._current() in ('e', 'E'):
-            self._advance()
-            if not self._at_end() and self._current() in ('+', '-'):
-                self._advance()
-            while not self._at_end() and self._is_digit(self._current()):
-                self._advance()
+            is_exponent = False
+            next_char = self._peek(1)
+            if self._is_digit(next_char):
+                is_exponent = True
+            elif next_char in ('+', '-'):
+                if self._is_digit(self._peek(2)):
+                    is_exponent = True
+                    
+            if is_exponent:
+                self._advance()  # consume 'e'/'E'
+                if not self._at_end() and self._current() in ('+', '-'):
+                    self._advance()
+                while not self._at_end() and self._is_digit(self._current()):
+                    self._advance()
         
         value = self._expression[start:self._pos]
         return Token(TokenType.NUMBER, value, start, self._pos - start)

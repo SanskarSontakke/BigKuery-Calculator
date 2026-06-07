@@ -26,11 +26,17 @@ An arbitrary precision scientific calculator built with Python and PyQt6. It pro
   - Use previous result: `ans + 5`
   - Built-in constants: `pi` (π), `e`, `phi` (φ), `tau` (τ), `euler` (γ), `inf` (∞)
 
-- **Modern User Interface**:
-  - **PyQt6 GUI**: Responsive and dark-themed.
-  - **Smart Input**: Syntax highlighting and multi-line support.
-  - **Formatted Output**: Clear error messages and precision-aware result formatting.
-  - **Keyboard Friendly**: Extensive shortcuts for efficiency.
+- **Modern User Interface & Whiteboard Canvas**:
+  - **Infinite Grid Canvas**: Calculation cards exist as independent widgets on a 2D whiteboard background.
+  - **Draggable Cards & Viewport**: Click and drag individual cards to reposition them. Pan the view by clicking and dragging on the background grid.
+  - **Manual Resizing**: Adjust card dimensions manually by clicking and dragging the visual resize grip (diagonal lines) in the bottom-right corner.
+  - **Grow-Only Sizing**: Cards automatically scale up to fit longer expressions and evaluation steps, but never shrink unless cleared, ensuring contents are never cut off.
+
+- **Global Variable Propagation & Bidirectional Solving**:
+  - **Multi-Pass Solver**: Defining a variable in one card (e.g. `x = 2`) automatically updates and solves equations referencing `x` in all other cards in real-time.
+  - **Bidirectional Evaluation**: Variable definitions propagate across cards regardless of creation order.
+  - **Automatic Garbage Collection**: Deleting cards detaches widgets from the visual hierarchy and collects memory to ensure zero leakages.
+  - **Keyboard Friendly**: Tab switches between virtual keyboard sheets, with custom DEG/RAD and scientific layouts.
 
 ## Installation
 

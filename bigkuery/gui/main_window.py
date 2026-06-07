@@ -4,180 +4,110 @@ MainWindow - Main application window.
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QDockWidget, QMenuBar, QMenu, QStatusBar,
-    QMessageBox, QApplication, QSplitter, QLabel, QPushButton,
-    QDialog, QTextBrowser, QDialogButtonBox
+    QMenuBar, QMenu, QMessageBox, QApplication, QLabel, QPushButton
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 
 from .input_widget import InputWidget
-from .output_display import OutputDisplay
+from .output_display import OutputDisplay, EquationBlock
 from .button_panel import ButtonPanel
 from .settings_dialog import SettingsDialog
+from bigkuery.core.solver import solve_workspace_equation, solve_workspace_expression_steps
+from bigkuery.core import EvalContext
 
-from bigkuery.core import Evaluator, EvalContext
+
+class BlockData:
+    """Represents the data of a single equation block on the canvas."""
+    def __init__(self, expression="", x=20, y=20):
+        self.expression = expression
+        self.x = x
+        self.y = y
+        self.widget = None
+        self.is_custom_positioned = False
 
 
-class HelpDialog(QDialog):
-    """Help dialog showing available functions and constants."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Function Reference")
-        self.setMinimumSize(500, 400)
-        self._setup_ui()
-    
-    def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        browser = QTextBrowser()
-        browser.setOpenExternalLinks(True)
-        browser.setHtml(self._get_help_content())
-        layout.addWidget(browser)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
-        
-        self.setStyleSheet("""
-            QDialog { background-color: #252526; }
-            QTextBrowser { 
-                background-color: #1e1e1e; 
-                color: #d4d4d4;
-                border: 1px solid #3c3c3c;
-                border-radius: 4px;
-                padding: 10px;
-            }
-            QPushButton {
-                background-color: #0e639c;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-            }
-        """)
-    
-    def _get_help_content(self) -> str:
-        return """
-        <h2 style="color:#4ec9b0;">BigKuery Calculator - Function Reference</h2>
-        
-        <h3 style="color:#dcdcaa;">Keyboard Shortcuts</h3>
-        <table style="color:#d4d4d4;">
-            <tr><td><b>Enter</b></td><td>Evaluate expression</td></tr>
-            <tr><td><b>Ctrl+C</b></td><td>Copy result</td></tr>
-            <tr><td><b>Ctrl+L</b></td><td>Clear input/output</td></tr>
-            <tr><td><b>Ctrl+,</b></td><td>Open settings</td></tr>
-            <tr><td><b>F1</b></td><td>Show this help</td></tr>
-            <tr><td><b>Escape</b></td><td>Clear input</td></tr>
-        </table>
-        
-        <h3 style="color:#dcdcaa;">Trigonometric Functions</h3>
-        <p style="color:#d4d4d4;">
-            <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>cot</code>, <code>sec</code>, <code>csc</code><br>
-            <code>asin</code>, <code>acos</code>, <code>atan</code>, <code>acot</code>, <code>asec</code>, <code>acsc</code>
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Hyperbolic Functions</h3>
-        <p style="color:#d4d4d4;">
-            <code>sinh</code>, <code>cosh</code>, <code>tanh</code>, <code>coth</code>, <code>sech</code>, <code>csch</code><br>
-            <code>asinh</code>, <code>acosh</code>, <code>atanh</code>
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Exponential & Logarithmic</h3>
-        <p style="color:#d4d4d4;">
-            <code>exp(x)</code> - e^x<br>
-            <code>log(x)</code>, <code>ln(x)</code> - natural log<br>
-            <code>log10(x)</code> - base-10 log<br>
-            <code>log2(x)</code> - base-2 log<br>
-            <code>pow(x, y)</code> - x^y
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Roots & Powers</h3>
-        <p style="color:#d4d4d4;">
-            <code>sqrt(x)</code> - square root<br>
-            <code>cbrt(x)</code> - cube root<br>
-            <code>x^y</code> - power<br>
-            <code>x!</code> - factorial
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Rounding</h3>
-        <p style="color:#d4d4d4;">
-            <code>floor</code>, <code>ceil</code>, <code>round</code>, <code>trunc</code>, <code>abs</code>
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Special Functions</h3>
-        <p style="color:#d4d4d4;">
-            <code>gamma(x)</code> - gamma function<br>
-            <code>factorial(n)</code> - n!<br>
-            <code>gcd(a, b)</code> - greatest common divisor<br>
-            <code>lcm(a, b)</code> - least common multiple<br>
-            <code>min(a, b)</code>, <code>max(a, b)</code><br>
-            <code>clamp(x, min, max)</code>
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Constants</h3>
-        <p style="color:#d4d4d4;">
-            <code>pi</code> (π), <code>e</code>, <code>phi</code> (φ), <code>tau</code> (τ), <code>euler</code> (γ), <code>inf</code> (∞)
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Variables</h3>
-        <p style="color:#d4d4d4;">
-            Assign: <code>x = 5</code><br>
-            Use: <code>2 * x + 1</code><br>
-            <code>ans</code> - last result
-        </p>
-        
-        <h3 style="color:#dcdcaa;">Examples</h3>
-        <p style="color:#d4d4d4;">
-            <code>2 + 3 * 4</code> → 14<br>
-            <code>sin(pi/2)</code> → 1<br>
-            <code>sqrt(2)</code> → 1.414...<br>
-            <code>10!</code> → 3628800<br>
-            <code>log(e^5)</code> → 5
-        </p>
-        """
+class Workspace:
+    """Represents an independent calculation workspace with multiple equations."""
+    def __init__(self):
+        self.blocks = []  # list of BlockData objects
+        self.current_index = 0
 
 
 class MainWindow(QMainWindow):
     """
     Main application window for BigKuery Calculator.
     
-    Contains the input widget, output display, and button panel.
+    Contains the mobile-inspired desktop header, input widget, 
+    graph-grid output display canvas, and responsive virtual keyboard.
+    Supports 3 independent workspaces and cumulative equation solving.
     """
     
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Initialize evaluator
+        # Initialize evaluator context
         self._context = EvalContext()
-        self._evaluator = Evaluator(self._context)
+        self._eng_mode = False
+        
+        # Initialize 3 independent workspaces
+        self._workspaces = [Workspace(), Workspace(), Workspace()]
+        self._current_workspace_idx = 0
         
         # Settings
         self._settings = QSettings("BigKuery", "Calculator")
         
-        # UI components (initialized in _setup_ui)
+        # UI components
         self._input_widget = None
         self._output_display = None
         self._button_panel = None
         self._settings_dialog = None
-        self._help_dialog = None
         
         self._setup_ui()
+        
+        # Setup initial blocks for the workspaces
+        for ws in self._workspaces:
+            self._create_block_for_workspace(ws, "", 20, 20)
+            
         self._setup_menus()
         self._setup_shortcuts()
-        self._setup_status_bar()
         self._load_settings()
         self._apply_theme()
         
-        # Apply result format
-        result_format = self._settings.value("result_format", "scroll", type=str)
-        self._output_display.set_view_mode(result_format)
-    
+        # Update highlights on start
+        self._button_panel.set_active_workspace_highlight(self._current_workspace_idx)
+        self._update_active_block_highlight()
+        
+    def _create_block_for_workspace(self, workspace, expression, x, y):
+        """Create a block widget and its associated data container."""
+        idx = len(workspace.blocks)
+        
+        # Widget parent is the canvas widget inside OutputDisplay
+        widget = EquationBlock(idx, expression, self._output_display.canvas)
+        widget.move(x, y)
+        
+        # Connect signals
+        widget.expression_changed.connect(self._on_block_expression_changed)
+        widget.position_changed.connect(self._on_block_position_changed)
+        widget.clicked.connect(self._on_block_clicked)
+        widget.deleted.connect(self._on_block_deleted)
+        
+        block_data = BlockData(expression, x, y)
+        block_data.widget = widget
+        workspace.blocks.append(block_data)
+        
+        # Set visibility based on active workspace state
+        if workspace != self._workspaces[self._current_workspace_idx]:
+            widget.hide()
+        else:
+            widget.show()
+            
+        return block_data
+        
     def _setup_ui(self):
-        """Set up the main window UI."""
+        """Set up the main window layout."""
         self.setWindowTitle("BigKuery Calculator")
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(850, 650)
         
         # Central widget
         central = QWidget()
@@ -185,39 +115,137 @@ class MainWindow(QMainWindow):
         
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        main_layout.setSpacing(8)
         
-        # Output display (top)
-        self._output_display = OutputDisplay()
-        main_layout.addWidget(self._output_display)
+        # 1. Custom Mobile-to-Desktop Header Bar
+        header_widget = QWidget()
+        header_widget.setObjectName("HeaderWidget")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(10, 4, 10, 4)
         
-        # Input widget
+        menu_btn = QPushButton("≡")
+        menu_btn.setFixedSize(30, 30)
+        menu_btn.setObjectName("HeaderIconBtn")
+        menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        menu_btn.clicked.connect(self.show_about)
+        header_layout.addWidget(menu_btn)
+        
+        title_label = QLabel("Calculator")
+        title_label.setObjectName("HeaderTitle")
+        header_layout.addWidget(title_label)
+        
+        header_layout.addStretch()
+        
+        # Clickable DEG/RAD Toggle
+        self._deg_btn = QPushButton("DEG")
+        self._deg_btn.setFixedSize(50, 30)
+        self._deg_btn.setObjectName("HeaderToggleBtn")
+        self._deg_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._deg_btn.clicked.connect(self._toggle_angle_mode)
+        header_layout.addWidget(self._deg_btn)
+        
+        # Clickable ENG mode Toggle
+        self._eng_btn = QPushButton("ENG")
+        self._eng_btn.setFixedSize(50, 30)
+        self._eng_btn.setObjectName("HeaderToggleBtn")
+        self._eng_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._eng_btn.clicked.connect(self._toggle_eng_mode)
+        header_layout.addWidget(self._eng_btn)
+        
+        more_btn = QPushButton("⋮")
+        more_btn.setFixedSize(30, 30)
+        more_btn.setObjectName("HeaderIconBtn")
+        more_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        more_btn.clicked.connect(self.show_settings)
+        header_layout.addWidget(more_btn)
+        
+        main_layout.addWidget(header_widget)
+        
+        # 2. Input Box layout (Expression Input + Red Clear Button)
+        input_container = QWidget()
+        input_layout = QHBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(6)
+        
         self._input_widget = InputWidget()
-        self._input_widget.evaluate_requested.connect(self.evaluate)
-        main_layout.addWidget(self._input_widget)
+        self._input_widget.textChanged.connect(self.evaluate)  # Real-time evaluation on typing
+        input_layout.addWidget(self._input_widget, stretch=1)
         
-        # Button panel
+        clear_btn = QPushButton("C")
+        clear_btn.setFixedSize(45, 45)
+        clear_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6e3030;
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+                border: 1px solid #8b3a3a;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #8b3a3a;
+            }
+            QPushButton:pressed {
+                background-color: #5a2626;
+            }
+        """)
+        clear_btn.clicked.connect(self.clear)
+        input_layout.addWidget(clear_btn)
+        
+        main_layout.addWidget(input_container)
+        
+        # 3. Output display (infinite grid canvas)
+        self._output_display = OutputDisplay()
+        main_layout.addWidget(self._output_display, stretch=3)
+        
+        # Floating Action Button (+) overlaying the display to add new equation
+        self._plus_btn = QPushButton("+", self._output_display)
+        self._plus_btn.setFixedSize(50, 50)
+        self._plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._plus_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0b6285;
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+                border-radius: 25px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #0e7fa8;
+            }
+            QPushButton:pressed {
+                background-color: #084964;
+            }
+        """)
+        self._plus_btn.clicked.connect(self.add_new_equation)
+        
+        # 4. Multi-sheet Virtual Keyboard
         self._button_panel = ButtonPanel()
         self._button_panel.button_clicked.connect(self._on_button_clicked)
         self._button_panel.function_clicked.connect(self._on_function_clicked)
         self._button_panel.constant_clicked.connect(self._on_constant_clicked)
-        main_layout.addWidget(self._button_panel, stretch=1)
+        self._button_panel.workspace_changed.connect(self.switch_workspace)
+        main_layout.addWidget(self._button_panel, stretch=2)
         
-        # Dialogs
+        # Connect keyboard tab switching to the input widget
+        self._input_widget.tab_pressed.connect(self._button_panel.switch_to_next_tab)
+        
+        # Settings Dialog
         self._settings_dialog = SettingsDialog(self)
         self._settings_dialog.settings_changed.connect(self._on_settings_changed)
-        self._help_dialog = HelpDialog(self)
-    
+        
     def _setup_menus(self):
-        """Set up the menu bar."""
+        """Set up standard desktop menu bar."""
         menubar = self.menuBar()
         
         # File menu
         file_menu = menubar.addMenu("&File")
         
-        clear_action = QAction("&Clear", self)
+        clear_action = QAction("&Clear All", self)
         clear_action.setShortcut(QKeySequence("Ctrl+L"))
-        clear_action.triggered.connect(self.clear)
+        clear_action.triggered.connect(self.clear_all)
         file_menu.addAction(clear_action)
         
         file_menu.addSeparator()
@@ -243,226 +271,414 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self.show_settings)
         view_menu.addAction(settings_action)
         
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
-        
-        help_action = QAction("&Function Reference", self)
-        help_action.setShortcut(QKeySequence("F1"))
-        help_action.triggered.connect(self.show_help)
-        help_menu.addAction(help_action)
-        
-        help_menu.addSeparator()
-        
-        about_action = QAction("&About", self)
-        about_action.triggered.connect(self.show_about)
-        help_menu.addAction(about_action)
-    
     def _setup_shortcuts(self):
-        """Set up additional keyboard shortcuts."""
-        # Escape to clear input
+        """Set up helper keyboard shortcuts."""
         escape_shortcut = QShortcut(QKeySequence("Escape"), self)
         escape_shortcut.activated.connect(self._input_widget.clear_expression)
-    
-    def _setup_status_bar(self):
-        """Set up the status bar."""
-        self._status_bar = QStatusBar()
-        self.setStatusBar(self._status_bar)
         
-        # Permanent widgets
-        self._mode_label = QLabel()
-        self._mode_label.setStyleSheet("padding: 0 10px;")
-        self._status_bar.addPermanentWidget(self._mode_label)
-        
-        self._precision_label = QLabel()
-        self._precision_label.setStyleSheet("padding: 0 10px;")
-        self._status_bar.addPermanentWidget(self._precision_label)
-        
-        self._settings_button = QPushButton("Settings")
-        self._settings_button.clicked.connect(self.show_settings)
-        self._settings_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: white;
-                border: 1px solid rgba(255, 255, 255, 0.3);
-                border-radius: 3px;
-                padding: 2px 8px;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-        """)
-        self._status_bar.addPermanentWidget(self._settings_button)
-        
-        self._update_status()
-    
-    def _update_status(self):
-        """Update the status bar."""
-        mode = "RAD" if self._context.radians_mode else "DEG"
-        # Convert bits to digits (approx)
-        digits = int(self._context.precision / 3.32)
-        
-        self._mode_label.setText(f"Mode: {mode}")
-        self._precision_label.setText(f"Precision: {digits} digits")
-    
+    def _toggle_angle_mode(self):
+        """Toggle between DEG and RAD modes."""
+        self._context.radians_mode = not self._context.radians_mode
+        self._deg_btn.setText("RAD" if self._context.radians_mode else "DEG")
+        self.evaluate()
+            
+    def _toggle_eng_mode(self):
+        """Toggle engineering mode highlighting."""
+        self._eng_mode = not self._eng_mode
+        self._eng_btn.setStyleSheet(
+            "background-color: #0e639c; font-weight: bold; border-radius: 4px;" if self._eng_mode 
+            else "background-color: #3c3c3c; border-radius: 4px;"
+        )
+        self.evaluate()
+
     def _apply_theme(self):
-        """Apply the dark theme."""
+        """Apply a dark theme styled like the mobile reference screens."""
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #1e1e1e;
+                background-color: #16191f;
+            }
+            #HeaderWidget {
+                background-color: #20242c;
+                border-radius: 6px;
+                border: 1px solid #2d3139;
+            }
+            #HeaderTitle {
+                color: #ffffff;
+                font-size: 14px;
+                font-weight: bold;
+                padding-left: 5px;
+            }
+            #HeaderIconBtn {
+                background-color: transparent;
+                color: #d4d4d4;
+                border: none;
+                font-size: 18px;
+            }
+            #HeaderIconBtn:hover {
+                background-color: #2d3139;
+                border-radius: 4px;
+            }
+            #HeaderToggleBtn {
+                background-color: #2d3139;
+                color: #d4d4d4;
+                border: 1px solid #3c4048;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            #HeaderToggleBtn:hover {
+                background-color: #3c4048;
             }
             QMenuBar {
-                background-color: #2d2d2d;
+                background-color: #1e222b;
                 color: #d4d4d4;
             }
             QMenuBar::item:selected {
-                background-color: #3c3c3c;
+                background-color: #2d3139;
             }
             QMenu {
-                background-color: #2d2d2d;
+                background-color: #1e222b;
                 color: #d4d4d4;
-                border: 1px solid #3c3c3c;
+                border: 1px solid #2d3139;
             }
             QMenu::item:selected {
                 background-color: #094771;
             }
-            QStatusBar {
-                background-color: #007acc;
-                color: white;
-            }
-            QDockWidget {
-                color: #d4d4d4;
-            }
-            QDockWidget::title {
-                background-color: #2d2d2d;
-                padding: 5px;
-            }
         """)
-    
-    def _load_settings(self):
-        """Load settings from storage."""
-        # Precision stored in bits, default 27 bits (~8 digits)
-        self._context.precision = self._settings.value("precision", 27, type=int)
-        self._context.radians_mode = self._settings.value("radians_mode", False, type=bool)
         
-        # Window geometry
+    def _load_settings(self):
+        """Load settings configuration."""
+        self._context.radians_mode = self._settings.value("radians_mode", False, type=bool)
+        self._deg_btn.setText("RAD" if self._context.radians_mode else "DEG")
+        
+        # Window size & state
         geometry = self._settings.value("geometry")
         if geometry:
             self.restoreGeometry(geometry)
         
-        state = self._settings.value("state")
-        if state:
-            self.restoreState(state)
-        
-        # Update settings dialog (convert bits to digits)
-        digits = int(self._context.precision / 3.32)
-        self._settings_dialog.set_settings({
-            "precision": max(1, digits),
-            "radians_mode": self._context.radians_mode,
-            "result_format": self._settings.value("result_format", "scroll", type=str),
-        })
-        
-        self._update_status()
-    
     def _save_settings(self):
-        """Save settings to storage."""
-        self._settings.setValue("precision", self._context.precision)
+        """Save settings configuration."""
         self._settings.setValue("radians_mode", self._context.radians_mode)
         self._settings.setValue("geometry", self.saveGeometry())
-        self._settings.setValue("state", self.saveState())
-    
+        
+    def _update_active_block_highlight(self):
+        """Apply selected highlight borders to active block and normal borders to inactive blocks."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        for idx, block in enumerate(workspace.blocks):
+            if idx == workspace.current_index:
+                block.widget.set_selected(True)
+            else:
+                block.widget.set_selected(False)
+                
+    def _on_block_expression_changed(self, idx, text):
+        """Sync inline block editing back to core and trigger workspace solve."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        if 0 <= idx < len(workspace.blocks):
+            block = workspace.blocks[idx]
+            block.expression = text
+            if idx == workspace.current_index:
+                self._input_widget.blockSignals(True)
+                self._input_widget.set_expression(text)
+                self._input_widget.blockSignals(False)
+            self.evaluate()
+            
+    def _on_block_position_changed(self, idx, x, y):
+        """Update block position and trigger evaluation (as dragging can change vertical layout order)."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        if 0 <= idx < len(workspace.blocks):
+            block = workspace.blocks[idx]
+            block.x = x
+            block.y = y
+            block.is_custom_positioned = True
+            self.evaluate()
+            
+    def _on_block_clicked(self, idx):
+        """Handle clicks on equation blocks to set active focus."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        if 0 <= idx < len(workspace.blocks):
+            workspace.current_index = idx
+            self._update_active_block_highlight()
+            
+            # Sync main input field
+            block = workspace.blocks[idx]
+            self._input_widget.blockSignals(True)
+            self._input_widget.set_expression(block.expression)
+            self._input_widget.blockSignals(False)
+            
+    def _on_block_deleted(self, idx):
+        """Handle deleting equation cards from the workspace."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        if 0 <= idx < len(workspace.blocks):
+            block = workspace.blocks[idx]
+            block.widget.setParent(None)
+            block.widget.deleteLater()
+            workspace.blocks.pop(idx)
+            
+            # Explicit garbage collection to release deleted widgets from memory
+            import gc
+            gc.collect()
+            
+            # Keep workspace non-empty
+            if not workspace.blocks:
+                self._create_block_for_workspace(workspace, "", 20, 20)
+                workspace.current_index = 0
+            else:
+                workspace.current_index = min(workspace.current_index, len(workspace.blocks) - 1)
+                
+            self._update_active_block_highlight()
+            
+            # Load current index text to top input
+            active_block = workspace.blocks[workspace.current_index]
+            self._input_widget.blockSignals(True)
+            self._input_widget.set_expression(active_block.expression)
+            self._input_widget.blockSignals(False)
+            
+            self.evaluate()
+        
     def evaluate(self):
-        """Evaluate the current expression."""
-        expr = self._input_widget.get_expression()
-        if not expr:
+        """Parse and solve all workspace equations sequentially, supporting cumulative definitions."""
+        # Guard against recursive signals during UI setup
+        if not self._input_widget or not hasattr(self, "_workspaces"):
             return
+            
+        workspace = self._workspaces[self._current_workspace_idx]
         
-        result = self._evaluator.evaluate(expr)
+        # 1. Update the active block's expression with the content of the top input box
+        if 0 <= workspace.current_index < len(workspace.blocks):
+            active_block = workspace.blocks[workspace.current_index]
+            expr = self._input_widget.get_expression()
+            active_block.expression = expr
+            active_block.widget.set_expression(expr)
+            
+        # 2. Sort the blocks in the workspace list by their y-coordinate (top-to-bottom)
+        # This matches evaluation sequence with the visual top-to-bottom layout
+        active_block = workspace.blocks[workspace.current_index]
+        workspace.blocks.sort(key=lambda b: (b.widget.y(), b.widget.x()))
+        workspace.current_index = workspace.blocks.index(active_block)
         
-        if result.is_error:
-            self._output_display.set_result(result.error, is_error=True)
-        else:
-            # Calculate display digits from precision bits
-            display_digits = max(8, int(self._context.precision / 3.32))
-            result_str = result.to_string(display_digits)
-            self._output_display.set_result(result_str)
-    
-    def clear(self):
-        """Clear the input and output."""
+        # 3. Multi-pass evaluation to propagate definitions globally (both forward and backward)
+        definitions = {}
+        max_passes = 5
+        
+        for p in range(max_passes):
+            prev_defs = definitions.copy()
+            for block in workspace.blocks:
+                expr_str = block.expression
+                if not expr_str.strip():
+                    continue
+                processed = expr_str.replace('×', '*').replace('÷', '/').replace('−', '-')
+                if '=' in processed:
+                    _, next_defs = solve_workspace_equation(expr_str, definitions, deg_mode=not self._context.radians_mode)
+                    definitions.update(next_defs)
+                    
+            if prev_defs == definitions:
+                break
+                
+        # 4. Final pass: Apply results to the widgets using the stabilized definitions
+        for i, block in enumerate(workspace.blocks):
+            expr_str = block.expression
+            if not expr_str.strip():
+                block.widget.set_empty()
+                continue
+                
+            processed = expr_str.replace('×', '*').replace('÷', '/').replace('−', '-')
+            if '=' in processed:
+                res_lines, _ = solve_workspace_equation(expr_str, definitions, deg_mode=not self._context.radians_mode)
+            else:
+                res_lines, _ = solve_workspace_expression_steps(expr_str, definitions, deg_mode=not self._context.radians_mode)
+                
+            block.widget.set_result(res_lines)
+            
+        # 5. Auto-layout non-custom positioned blocks in a vertical stack to prevent overlaps on resize
+        # This runs AFTER results are set, so we use the correct, updated card heights
+        current_y = 20
+        for idx, block in enumerate(workspace.blocks):
+            block.widget.set_index(idx)
+            
+            if not block.is_custom_positioned:
+                block.widget.move(20, current_y)
+                block.x = 20
+                block.y = current_y
+                block.widget.update_size()
+                
+            current_y = block.widget.y() + block.widget.height() + 20
+            
+        self._update_active_block_highlight()
+        
+    def add_new_equation(self):
+        """Append a new empty equation block below the lowest block on the canvas."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        
+        # Save current active block expression
+        active_block = workspace.blocks[workspace.current_index]
+        active_block.expression = self._input_widget.get_expression()
+        active_block.widget.set_expression(active_block.expression)
+        
+        # Find lowest y position
+        max_y = 0
+        for block in workspace.blocks:
+            y_bottom = block.widget.y() + block.widget.height()
+            if y_bottom > max_y:
+                max_y = y_bottom
+                
+        new_y = max(20, max_y + 20)
+        new_x = 20
+        
+        # Create block
+        self._create_block_for_workspace(workspace, "", new_x, new_y)
+        
+        # Focus the new block
+        workspace.current_index = len(workspace.blocks) - 1
+        self._update_active_block_highlight()
+        
+        self._input_widget.blockSignals(True)
         self._input_widget.clear_expression()
-        self._output_display.clear_result()
-    
+        self._input_widget.blockSignals(False)
+        self._input_widget.setFocus()
+        
+        self.evaluate()
+        
+    def switch_workspace(self, index: int):
+        """Switch active calculation workspace (1, 2, or 3)."""
+        # Save current active block input
+        current_ws = self._workspaces[self._current_workspace_idx]
+        if 0 <= current_ws.current_index < len(current_ws.blocks):
+            active_block = current_ws.blocks[current_ws.current_index]
+            active_block.expression = self._input_widget.get_expression()
+            active_block.widget.set_expression(active_block.expression)
+            
+        # Hide current workspace widgets
+        for block in current_ws.blocks:
+            block.widget.hide()
+            
+        # Switch index
+        self._current_workspace_idx = index
+        self._button_panel.set_active_workspace_highlight(index)
+        
+        # Show new workspace widgets
+        new_ws = self._workspaces[index]
+        for block in new_ws.blocks:
+            block.widget.show()
+            
+        # Load new workspace active block
+        new_active_block = new_ws.blocks[new_ws.current_index]
+        self._input_widget.blockSignals(True)
+        self._input_widget.set_expression(new_active_block.expression)
+        self._input_widget.blockSignals(False)
+        
+        self._update_active_block_highlight()
+        self.evaluate()
+        self._input_widget.setFocus()
+        
+    def clear(self):
+        """Clear the current active equation."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        if 0 <= workspace.current_index < len(workspace.blocks):
+            active_block = workspace.blocks[workspace.current_index]
+            active_block.expression = ""
+            active_block.widget.set_expression("")
+            
+        self._input_widget.blockSignals(True)
+        self._input_widget.clear_expression()
+        self._input_widget.blockSignals(False)
+        
+        self.evaluate()
+        self._input_widget.setFocus()
+        
+    def clear_all(self):
+        """Clear all equations in the current active workspace, resetting to a single empty block."""
+        workspace = self._workspaces[self._current_workspace_idx]
+        
+        # Delete widgets
+        while len(workspace.blocks) > 1:
+            block = workspace.blocks.pop()
+            block.widget.setParent(None)
+            block.widget.deleteLater()
+            
+        # Explicit garbage collection to release deleted widgets from memory
+        import gc
+        gc.collect()
+            
+        # Reset the first block to empty at default coordinate (20, 20)
+        first_block = workspace.blocks[0]
+        first_block.expression = ""
+        first_block.widget.set_expression("")
+        first_block.widget.move(20, 20)
+        first_block.x = 20
+        first_block.y = 20
+        first_block.is_custom_positioned = False
+        first_block.widget.show()
+        
+        workspace.current_index = 0
+        
+        self._input_widget.blockSignals(True)
+        self._input_widget.clear_expression()
+        self._input_widget.blockSignals(False)
+        
+        self._update_active_block_highlight()
+        self.evaluate()
+        self._input_widget.setFocus()
+        
     def copy_result(self):
-        """Copy the current result to clipboard."""
+        """Copy plaintext result content to clipboard."""
         result = self._output_display.get_result()
         clipboard = QApplication.clipboard()
         clipboard.setText(result)
-        self._status_bar.showMessage("Result copied to clipboard", 2000)
-    
+        
     def show_settings(self):
-        """Show the settings dialog."""
+        """Show settings configuration dialog."""
         self._settings_dialog.exec()
-    
-    def show_help(self):
-        """Show the help/function reference dialog."""
-        self._help_dialog.exec()
-    
+        
     def show_about(self):
-        """Show the about dialog."""
+        """Show standard calculator about message."""
         QMessageBox.about(
             self,
             "About BigKuery Calculator",
-            """<h2>BigKuery Calculator</h2>
-            <p>Version 1.0.0</p>
-            <p>An arbitrary precision scientific calculator.</p>
-            <p>Features:</p>
-            <ul>
-                <li>Arbitrary precision arithmetic</li>
-                <li>Scientific functions (trig, log, etc.)</li>
-                <li>Variable assignment</li>
-                <li>Responsive UI</li>
-            </ul>
-            <p>&copy; 2024 BigKuery</p>
-            """
+            "<h3>BigKuery Calculator</h3>"
+            "<p>An advanced equation rearranging and solving calculator powered by SymPy.</p>"
+            "<p>&copy; 2026 Sanskar Sontakke</p>"
         )
-    
+        
     def _on_button_clicked(self, text: str):
-        """Handle button panel button clicks."""
+        """Handle button panel click events."""
         if text == "CLEAR":
             self.clear()
-        elif text == "EVAL":
-            self.evaluate()
         elif text == "BACKSPACE":
             cursor = self._input_widget.textCursor()
             cursor.deletePreviousChar()
+        elif text == "LEFT":
+            self._input_widget.moveCursor(self._input_widget.textCursor().MoveOperation.Left)
+        elif text == "RIGHT":
+            self._input_widget.moveCursor(self._input_widget.textCursor().MoveOperation.Right)
         else:
             self._input_widget.insert_text(text)
-    
+            
     def _on_function_clicked(self, func_name: str):
-        """Handle function button clicks."""
+        """Handle scientific function clicks."""
         self._input_widget.insert_text(f"{func_name}(")
-    
-    def _on_constant_clicked(self, constant: str):
-        """Handle constant button clicks."""
-        self._input_widget.insert_text(constant)
-    
-    def _on_settings_changed(self, settings: dict):
-        """Handle settings changes."""
-        if "precision" in settings:
-            # Convert digits to bits (approx 3.32 bits per digit)
-            self._context.precision = int(settings["precision"] * 3.32)
-            self._settings.setValue("precision", self._context.precision)
         
+    def _on_constant_clicked(self, constant: str):
+        """Handle variable and constant clicks."""
+        self._input_widget.insert_text(constant)
+        
+    def _on_settings_changed(self, settings: dict):
+        """Handle changes emitted by settings dialog."""
         if "radians_mode" in settings:
             self._context.radians_mode = settings["radians_mode"]
-            self._settings.setValue("radians_mode", self._context.radians_mode)
-        
-        if "result_format" in settings:
-            self._output_display.set_view_mode(settings["result_format"])
-            self._settings.setValue("result_format", settings["result_format"])
-        
-        self._update_status()
-    
+            self._deg_btn.setText("RAD" if self._context.radians_mode else "DEG")
+        self.evaluate()
+            
+    def resizeEvent(self, event):
+        """Handle floating layout overlays on window resize."""
+        super().resizeEvent(event)
+        # Re-position the floating "+" action button over the display widget
+        if hasattr(self, "_plus_btn") and hasattr(self, "_output_display"):
+            margin = 15
+            x = self._output_display.width() - self._plus_btn.width() - margin
+            y = self._output_display.height() - self._plus_btn.height() - margin
+            self._plus_btn.move(x, y)
+            
     def closeEvent(self, event: QCloseEvent):
-        """Handle window close event."""
+        """Save settings on application close."""
         self._save_settings()
         event.accept()

@@ -77,12 +77,18 @@ class EvalContext:
         if name in self.variables:
             return self.variables[name]
         
+        if name.lower() == "deg":
+            if self.radians_mode:
+                return MathFunctions.get_constant("pi", self.precision) / BigFloat(180)
+            else:
+                return BigFloat(1)
+        
         # Check built-in constants
         return MathFunctions.get_constant(name, self.precision)
     
     def has_variable(self, name: str) -> bool:
         """Check if a variable exists."""
-        return name in self.variables or MathFunctions.has_constant(name)
+        return name in self.variables or name.lower() == "deg" or MathFunctions.has_constant(name)
     
     def clear_variables(self) -> None:
         """Clear all user-defined variables."""

@@ -17,6 +17,8 @@ class InputWidget(QTextEdit):
     
     # Signal emitted when user presses Enter (without Shift)
     evaluate_requested = pyqtSignal()
+    # Signal emitted when Tab key is pressed
+    tab_pressed = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,8 +39,8 @@ class InputWidget(QTextEdit):
         # Placeholder
         self.setPlaceholderText("Enter expression (e.g., 2 + 2, sin(pi/2), x = 5)")
         
-        # Tab behavior
-        self.setTabChangesFocus(True)
+        # Tab behavior - handle Tab key customly
+        self.setTabChangesFocus(False)
         
         # Style
         self.setStyleSheet("""
@@ -62,6 +64,11 @@ class InputWidget(QTextEdit):
             event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         ):
             self.evaluate_requested.emit()
+            return
+        
+        # Tab switches functions tabs
+        if event.key() == Qt.Key.Key_Tab:
+            self.tab_pressed.emit()
             return
         
         # Shift+Enter for new line
