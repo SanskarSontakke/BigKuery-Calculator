@@ -1,6 +1,6 @@
 # BigKuery Calculator
 
-An arbitrary precision scientific calculator built with Python and PyQt6. It provides a robust engine for mathematical expression evaluation, supporting extremely high precision calculations, symbolic variables, and a wide range of functions.
+A scientific calculator built with Python and PyQt6 that evaluates mathematical expressions with arbitrary precision, supporting symbolic variables and 50+ functions.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.0+-green.svg)
@@ -42,7 +42,7 @@ An arbitrary precision scientific calculator built with Python and PyQt6. It pro
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/BigKuery-Calculator.git
+git clone https://github.com/SanskarSontakke/BigKuery-Calculator.git
 cd BigKuery-Calculator
 
 # Install dependencies

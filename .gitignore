@@ -24,3 +24,19 @@ MANIFEST
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local scratch/debug files
+scratch/
