@@ -68,7 +68,7 @@ a whiteboard of calculation cards, and renders results as formatted math.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/BigKuery-Calculator.git
+git clone https://github.com/SanskarSontakke/BigKuery-Calculator.git
 cd BigKuery-Calculator
 
 # Install dependencies
