@@ -1,6 +1,8 @@
 # BigKuery Calculator
 
-An arbitrary precision scientific calculator built with Python and PyQt6. It provides a robust engine for mathematical expression evaluation, supporting extremely high precision calculations, symbolic variables, and a wide range of functions.
+A symbolic scientific calculator built with Python, SymPy, and PyQt6. It rearranges
+and solves equations, evaluates expressions step by step, propagates variables across
+a whiteboard of calculation cards, and renders results as formatted math.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.0+-green.svg)
@@ -8,18 +10,42 @@ An arbitrary precision scientific calculator built with Python and PyQt6. It pro
 
 ## Features
 
-- **Arbitrary Precision Arithmetic**:
-  - Calculate with configurable precision (default ~50 digits, up to 100+).
-  - Powered by `mpmath` for reliable high-precision floating-point operations.
+- **Symbolic Math Engine (SymPy)**:
+  - Solves and rearranges equations (`2x + 5 = 15`, `x^2 - 4 = 0`), not just arithmetic.
+  - Shows the work: step-by-step reduction from input to result.
+  - **Configurable numeric precision**: set the number of significant digits in Settings
+    (default 15, up to 100) for high-precision numeric answers.
 
-- **Advanced Mathematical Engine**:
-  - **Pratt Parser**: Handles operator precedence and associativity correctly.
-  - **Implicit Multiplication**: Supports natural syntax like `2x`, `3(x+1)`, and `(x+1)(x-1)`.
-  - **Scientific Functions**: Over 50 functions including:
-    - Trigonometric (sin, cos, tan, sec, csc, cot and inverses)
-    - Hyperbolic (sinh, cosh, tanh, etc.)
-    - Exponential & Logarithmic (exp, log, ln, log10, log2)
-    - Combinatorics (factorial, nCr, nPr, gamma)
+- **Rich Expression Support**:
+  - **Implicit Multiplication**: natural syntax like `2x`, `3(x+1)`, and `(x+1)(x-1)`.
+  - **Scientific Functions**: trigonometric (sin, cos, tan, sec, csc, cot and inverses),
+    hyperbolic (sinh, cosh, tanh, etc.), exponential & logarithmic (exp, log, ln, log10,
+    log2), roots (sqrt, cbrt), and combinatorics (factorial, binomial, gamma).
+  - **Calculus**: derivatives `diff(f, x)`, integrals `integrate(f, x)` /
+    `integrate(f, (x, a, b))`, and limits `limit(f, x, a)`.
+  - **Complex numbers** via `i` (e.g. `sqrt(-1) → i`, `(2+3i)(1-i) → 5 + i`).
+  - **Systems of equations**: separate equations with `;` to solve them together,
+    e.g. `x + y = 5; x - y = 1 → x = 3, y = 2`.
+  - **Plotting**: a 📈 button appears on any card with exactly one undefined
+    variable (e.g. `sin(x)`, or `a*x` once `a` is defined elsewhere) — click it to
+    plot the function inline.
+
+- **Beautiful math rendering**:
+  - Results are typeset with **KaTeX** (proper radicals, fractions, integrals,
+    Greek letters). KaTeX is bundled, so rendering works fully offline.
+  - Falls back automatically to lightweight HTML labels if `PyQt6-WebEngine` is
+    unavailable.
+
+- **Display options**:
+  - **DEG/RAD** angle modes and an **ENG** toggle for engineering notation
+    (exponents in multiples of 3).
+  - **Result format** in Settings: **Scroll** lets cards grow as wide as needed;
+    **Wrap** caps card width and wraps long results onto multiple lines instead.
+  - Press **F1** for an in-app function reference.
+
+- **Persistent workspaces**:
+  - Your cards are **saved automatically** and restored next time you open the app.
+  - **Save/Open** a workspace to a `.bkw` file (`Ctrl+S` / `Ctrl+O`) to back up or share.
 
 - **Variables & Constants**:
   - Assign variables: `x = 5`, `result = 2*x + 10`
@@ -64,26 +90,32 @@ python main.py
 
 | Shortcut | Action |
 |----------|--------|
-| **Enter** | Evaluate expression |
-| **Shift+Enter** | Insert new line |
-| **Escape** | Clear input |
-| **F1** | Show function reference |
-| **Ctrl+L** | Clear input/output |
+| *(live)* | Results update automatically as you type |
+| **Ctrl+S** | Save workspace to a file |
+| **Ctrl+O** | Open a saved workspace |
+| **F1** | Show the function reference |
+| **Shift+Enter** | Insert a new line in the input |
+| **Tab** | Switch the virtual keyboard sheet (0-9 / a-z / α-ω) |
+| **Escape** | Clear the current input |
+| **Ctrl+L** | Clear all cards in the active workspace |
 | **Ctrl+,** | Open settings |
-| **Ctrl+Shift+C** | Copy result |
+| **Ctrl+Shift+C** | Copy the workspace results |
 | **Ctrl+Q** | Exit |
 
 ### Examples
 
 ```
 2 + 3 * 4          → 14
-sin(pi/2)          → 1
+sin(90)            → 1          (degrees mode, the default)
 sqrt(2)            → 1.41421356...
 10!                → 3628800
-log(e^5)           → 5
-x = 10; x^2        → 100
-2(x+1)             → 22  (Implicit multiplication)
+log(e^5)           → 5          (log is the natural logarithm)
+2(x+1)             → 2x + 2     (implicit multiplication)
+x^2 - 4 = 0        → x = -2, 2  (equation solving)
 ```
+
+Define a variable in one card (`x = 10`) and reference it in another (`x^2 → 100`);
+definitions propagate across all cards in the workspace automatically.
 
 ## Architecture
 
@@ -91,22 +123,20 @@ The application follows a modular architecture separating the core logic from th
 
 ### Core (`bigkuery/core`)
 
-The calculation engine processes expressions in three stages:
+The calculation engine is built on **SymPy**:
 
-1.  **Tokenizer (`tokenizer.py`)**:
-    - Converts the input string into a stream of `Token` objects.
-    - Handles implicit multiplication detection (e.g., inserting `*` in `2x`).
-    - Recognizes numbers, identifiers, operators, and Unicode symbols.
+1.  **Solver (`solver.py`)**:
+    - Parses each expression with SymPy (`parse_expr`), applying transformations for
+      implicit multiplication and `^`-as-power.
+    - Substitutes known variable definitions, then either **solves** the equation
+      (`sympy.solve`, with a numeric `nsolve` fallback) or **reduces** the expression
+      step by step, recording each intermediate form.
+    - Renders the input and every step to formatted math via `sympy_to_html`.
+    - Evaluates numeric results to the configured precision (`sympy.N`).
 
-2.  **Parser (`parser.py`)**:
-    - Takes the token stream and builds an **Abstract Syntax Tree (AST)**.
-    - Uses a **Pratt Parser** (Top-Down Operator Precedence) to handle complex precedence rules (e.g., `*` before `+`, `^` is right-associative).
-    - Generates nodes like `BinaryOpNode`, `FunctionCallNode`, `AssignmentNode`, etc.
-
-3.  **Evaluator (`evaluator.py`)**:
-    - Traverses the AST recursively to compute the result.
-    - Uses `BigFloat` (wrapper around `mpmath.mpf`) for all numeric calculations to maintain high precision.
-    - Manages the `EvalContext`, which stores variables and settings (precision, angle mode).
+2.  **Context (`context.py`)**:
+    - `CalcContext` holds the user-facing settings the solver needs: angle mode
+      (degrees/radians) and numeric display precision.
 
 ### GUI (`bigkuery/gui`)
 
@@ -114,7 +144,9 @@ Built with PyQt6, utilizing a clean separation of concerns:
 
 - `MainWindow`: Orchestrates the application state.
 - `InputWidget`: Custom `QTextEdit` with specific input handling.
-- `OutputDisplay`: Renders results and errors.
+- `OutputDisplay`: The whiteboard canvas of draggable equation cards.
+- `MathView`: Renders LaTeX results via KaTeX in a `QWebEngineView` (with an
+  automatic HTML-label fallback).
 - `ButtonPanel`: Provides a clickable interface for common functions.
 
 ## Development & Testing
@@ -136,12 +168,9 @@ pytest tests/ -v
 ```
 BigKuery-Calculator/
 ├── bigkuery/
-│   ├── core/           # Logic: Tokenizer, Parser, Evaluator
-│   │   ├── big_float.py       # Arbitrary precision float wrapper
-│   │   ├── tokenizer.py       # Lexical analysis
-│   │   ├── parser.py          # AST generation
-│   │   ├── evaluator.py       # AST evaluation
-│   │   └── ...
+│   ├── core/           # Logic: SymPy solver
+│   │   ├── solver.py          # Parse, substitute, solve/reduce, render
+│   │   └── context.py         # CalcContext (angle mode, precision)
 │   ├── gui/            # Interface: Windows, Widgets
 │   └── __main__.py     # Entry point
 ├── tests/              # Unit tests
@@ -151,10 +180,14 @@ BigKuery-Calculator/
 
 ## Troubleshooting
 
--   **"Unknown function 'x' requires 2 arguments"**: You might be using a binary function like `pow` with only one argument. Check the help (F1) for signatures.
--   **"Parse error: Unexpected token"**: Check for unmatched parentheses or mistyped operators.
--   **"Cannot assign to constant"**: You tried to assign a value to `pi` or `e`. Use a different variable name.
--   **Complex Numbers**: Currently, the calculator supports real numbers only. Operations resulting in complex numbers (like `sqrt(-1)`) will raise a domain error.
+-   **"Parsing Error: ..."**: SymPy could not parse the expression. Check for unmatched
+    parentheses, mistyped operators, or an incomplete expression.
+-   **"No symbolic solution found"**: The equation has no closed-form solution for the
+    chosen variable; a numeric solution is attempted as a fallback.
+-   **`log` vs `log10`**: `log` is the natural logarithm (base *e*). Use `log10` or
+    `log2` for base-10 / base-2.
+-   **Complex Numbers**: Complex values are supported in expressions via `i`
+    (e.g., `i^2 → -1`, `sqrt(-1) → i`).
 
 ## License
 

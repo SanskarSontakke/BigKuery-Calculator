@@ -2,19 +2,23 @@
 MainWindow - Main application window.
 """
 
+import json
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QMenuBar, QMenu, QMessageBox, QApplication, QLabel, QPushButton
+    QMenuBar, QMenu, QMessageBox, QApplication, QLabel, QPushButton, QFileDialog
 )
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal, QTimer
 from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 
 from .input_widget import InputWidget
 from .output_display import OutputDisplay, EquationBlock
 from .button_panel import ButtonPanel
 from .settings_dialog import SettingsDialog
+from .math_view import KATEX_AVAILABLE
 from bigkuery.core.solver import solve_workspace_equation, solve_workspace_expression_steps
-from bigkuery.core import EvalContext
+from bigkuery.core import CalcContext
+from bigkuery.core.plotting import PLOT_AVAILABLE, free_symbol_for_plot
 
 
 class BlockData:
@@ -46,8 +50,8 @@ class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Initialize evaluator context
-        self._context = EvalContext()
+        # Calculator state (angle mode + display precision)
+        self._context = CalcContext()
         self._eng_mode = False
         
         # Initialize 3 independent workspaces
@@ -56,7 +60,14 @@ class MainWindow(QMainWindow):
         
         # Settings
         self._settings = QSettings("BigKuery", "Calculator")
-        
+
+        # Debounce timer: coalesce rapid edits (typing, dragging) into a single
+        # solve after a short idle, so we don't re-run SymPy on every keystroke.
+        self._eval_timer = QTimer(self)
+        self._eval_timer.setSingleShot(True)
+        self._eval_timer.setInterval(180)
+        self._eval_timer.timeout.connect(self.evaluate)
+
         # UI components
         self._input_widget = None
         self._output_display = None
@@ -77,6 +88,9 @@ class MainWindow(QMainWindow):
         # Update highlights on start
         self._button_panel.set_active_workspace_highlight(self._current_workspace_idx)
         self._update_active_block_highlight()
+
+        # Restore cards from the previous session, if any (persists across runs)
+        self._restore_saved_workspaces()
         
     def _create_block_for_workspace(self, workspace, expression, x, y):
         """Create a block widget and its associated data container."""
@@ -168,7 +182,7 @@ class MainWindow(QMainWindow):
         input_layout.setSpacing(6)
         
         self._input_widget = InputWidget()
-        self._input_widget.textChanged.connect(self.evaluate)  # Real-time evaluation on typing
+        self._input_widget.textChanged.connect(self._schedule_evaluate)  # debounced live eval
         input_layout.addWidget(self._input_widget, stretch=1)
         
         clear_btn = QPushButton("C")
@@ -242,12 +256,24 @@ class MainWindow(QMainWindow):
         
         # File menu
         file_menu = menubar.addMenu("&File")
-        
+
+        save_action = QAction("&Save Workspace...", self)
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_action.triggered.connect(self.save_workspace_to_file)
+        file_menu.addAction(save_action)
+
+        open_action = QAction("&Open Workspace...", self)
+        open_action.setShortcut(QKeySequence("Ctrl+O"))
+        open_action.triggered.connect(self.open_workspace_from_file)
+        file_menu.addAction(open_action)
+
+        file_menu.addSeparator()
+
         clear_action = QAction("&Clear All", self)
         clear_action.setShortcut(QKeySequence("Ctrl+L"))
         clear_action.triggered.connect(self.clear_all)
         file_menu.addAction(clear_action)
-        
+
         file_menu.addSeparator()
         
         exit_action = QAction("E&xit", self)
@@ -275,6 +301,9 @@ class MainWindow(QMainWindow):
         """Set up helper keyboard shortcuts."""
         escape_shortcut = QShortcut(QKeySequence("Escape"), self)
         escape_shortcut.activated.connect(self._input_widget.clear_expression)
+
+        f1_shortcut = QShortcut(QKeySequence("F1"), self)
+        f1_shortcut.activated.connect(self.show_function_reference)
         
     def _toggle_angle_mode(self):
         """Toggle between DEG and RAD modes."""
@@ -349,8 +378,10 @@ class MainWindow(QMainWindow):
     def _load_settings(self):
         """Load settings configuration."""
         self._context.radians_mode = self._settings.value("radians_mode", False, type=bool)
+        self._context.precision = self._settings.value("precision", self._context.precision, type=int)
+        self._context.result_format = self._settings.value("result_format", self._context.result_format, type=str)
         self._deg_btn.setText("RAD" if self._context.radians_mode else "DEG")
-        
+
         # Window size & state
         geometry = self._settings.value("geometry")
         if geometry:
@@ -359,7 +390,133 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         """Save settings configuration."""
         self._settings.setValue("radians_mode", self._context.radians_mode)
+        self._settings.setValue("precision", self._context.precision)
+        self._settings.setValue("result_format", self._context.result_format)
         self._settings.setValue("geometry", self.saveGeometry())
+        try:
+            self._settings.setValue("workspace_state", json.dumps(self._serialize_state()))
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ #
+    # Workspace persistence (save/load all cards across sessions & files) #
+    # ------------------------------------------------------------------ #
+    def _serialize_state(self) -> dict:
+        """Capture all workspaces and their cards as a JSON-serializable dict."""
+        return {
+            "version": 1,
+            "current_workspace": self._current_workspace_idx,
+            "workspaces": [
+                {
+                    "current_index": ws.current_index,
+                    "blocks": [
+                        {
+                            "expression": b.expression,
+                            "x": b.widget.x(),
+                            "y": b.widget.y(),
+                            "custom": b.is_custom_positioned,
+                        }
+                        for b in ws.blocks
+                    ],
+                }
+                for ws in self._workspaces
+            ],
+        }
+
+    def _restore_state(self, data: dict) -> bool:
+        """Rebuild all workspaces/cards from a serialized dict. Returns success."""
+        if not isinstance(data, dict) or "workspaces" not in data:
+            return False
+        ws_list = data["workspaces"]
+
+        # Remove every existing card widget
+        for ws in self._workspaces:
+            for b in ws.blocks:
+                b.widget.setParent(None)
+                b.widget.deleteLater()
+            ws.blocks = []
+
+        # Set the active workspace first so new widgets get correct visibility
+        self._current_workspace_idx = int(data.get("current_workspace", 0))
+        if not (0 <= self._current_workspace_idx < len(self._workspaces)):
+            self._current_workspace_idx = 0
+
+        for i, ws in enumerate(self._workspaces):
+            wd = ws_list[i] if i < len(ws_list) else {}
+            for bd in wd.get("blocks", []):
+                blk = self._create_block_for_workspace(
+                    ws, bd.get("expression", ""),
+                    int(bd.get("x", 20)), int(bd.get("y", 20)),
+                )
+                blk.is_custom_positioned = bool(bd.get("custom", False))
+            if not ws.blocks:
+                self._create_block_for_workspace(ws, "", 20, 20)
+            ws.current_index = wd.get("current_index", 0)
+            if not (0 <= ws.current_index < len(ws.blocks)):
+                ws.current_index = 0
+
+        # Ensure only the active workspace's cards are visible
+        for i, ws in enumerate(self._workspaces):
+            for b in ws.blocks:
+                b.widget.setVisible(i == self._current_workspace_idx)
+
+        # Sync the top input box to the active card
+        active_ws = self._workspaces[self._current_workspace_idx]
+        active_block = active_ws.blocks[active_ws.current_index]
+        self._input_widget.blockSignals(True)
+        self._input_widget.set_expression(active_block.expression)
+        self._input_widget.blockSignals(False)
+        return True
+
+    def _restore_saved_workspaces(self):
+        """Restore the auto-saved workspace state from the previous session."""
+        raw = self._settings.value("workspace_state", "", type=str)
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if self._restore_state(data):
+            self._button_panel.set_active_workspace_highlight(self._current_workspace_idx)
+            self._update_active_block_highlight()
+            self.evaluate()
+
+    def save_workspace_to_file(self):
+        """Save all workspaces/cards to a JSON file for sharing or backup."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Workspace", "workspace.bkw",
+            "BigKuery Workspace (*.bkw);;JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._serialize_state(), f, indent=2)
+        except OSError as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save workspace: {e}")
+
+    def open_workspace_from_file(self):
+        """Load all workspaces/cards from a previously saved JSON file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Workspace", "",
+            "BigKuery Workspace (*.bkw);;JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            QMessageBox.critical(self, "Open Error", f"Failed to open workspace: {e}")
+            return
+        if self._restore_state(data):
+            self._button_panel.set_active_workspace_highlight(self._current_workspace_idx)
+            self._update_active_block_highlight()
+            self.evaluate()
+            self._input_widget.setFocus()
+        else:
+            QMessageBox.warning(self, "Open Workspace", "That file is not a valid workspace.")
         
     def _update_active_block_highlight(self):
         """Apply selected highlight borders to active block and normal borders to inactive blocks."""
@@ -380,8 +537,8 @@ class MainWindow(QMainWindow):
                 self._input_widget.blockSignals(True)
                 self._input_widget.set_expression(text)
                 self._input_widget.blockSignals(False)
-            self.evaluate()
-            
+            self._schedule_evaluate()
+
     def _on_block_position_changed(self, idx, x, y):
         """Update block position and trigger evaluation (as dragging can change vertical layout order)."""
         workspace = self._workspaces[self._current_workspace_idx]
@@ -390,7 +547,7 @@ class MainWindow(QMainWindow):
             block.x = x
             block.y = y
             block.is_custom_positioned = True
-            self.evaluate()
+            self._schedule_evaluate()
             
     def _on_block_clicked(self, idx):
         """Handle clicks on equation blocks to set active focus."""
@@ -413,11 +570,10 @@ class MainWindow(QMainWindow):
             block.widget.setParent(None)
             block.widget.deleteLater()
             workspace.blocks.pop(idx)
-            
-            # Explicit garbage collection to release deleted widgets from memory
-            import gc
-            gc.collect()
-            
+
+            # Qt's deleteLater() + Python refcounting reclaim the widget; no manual
+            # gc.collect() needed (it would stall the UI on every delete).
+
             # Keep workspace non-empty
             if not workspace.blocks:
                 self._create_block_for_workspace(workspace, "", 20, 20)
@@ -435,8 +591,14 @@ class MainWindow(QMainWindow):
             
             self.evaluate()
         
+    def _schedule_evaluate(self):
+        """Request an evaluation, debounced to coalesce bursts of rapid edits."""
+        self._eval_timer.start()
+
     def evaluate(self):
         """Parse and solve all workspace equations sequentially, supporting cumulative definitions."""
+        # A pending debounced run is now subsumed by this immediate run.
+        self._eval_timer.stop()
         # Guard against recursive signals during UI setup
         if not self._input_widget or not hasattr(self, "_workspaces"):
             return
@@ -457,9 +619,14 @@ class MainWindow(QMainWindow):
         workspace.current_index = workspace.blocks.index(active_block)
         
         # 3. Multi-pass evaluation to propagate definitions globally (both forward and backward)
+        deg_mode = not self._context.radians_mode
+        prec = self._context.clamp_precision()
+        eng = self._eng_mode
+        wrap = self._context.is_wrap()
+        fmt = 'latex' if KATEX_AVAILABLE else 'html'
         definitions = {}
         max_passes = 5
-        
+
         for p in range(max_passes):
             prev_defs = definitions.copy()
             for block in workspace.blocks:
@@ -468,9 +635,11 @@ class MainWindow(QMainWindow):
                     continue
                 processed = expr_str.replace('×', '*').replace('÷', '/').replace('−', '-')
                 if '=' in processed:
-                    _, next_defs = solve_workspace_equation(expr_str, definitions, deg_mode=not self._context.radians_mode)
+                    # Use the same fmt as the final render pass so both share one
+                    # memoized solve per equation (rather than solving twice).
+                    _, next_defs = solve_workspace_equation(expr_str, definitions, deg_mode=deg_mode, precision=prec, eng=eng, fmt=fmt)
                     definitions.update(next_defs)
-                    
+
             if prev_defs == definitions:
                 break
                 
@@ -479,15 +648,24 @@ class MainWindow(QMainWindow):
             expr_str = block.expression
             if not expr_str.strip():
                 block.widget.set_empty()
+                block.widget.set_plot_context(None, definitions, deg_mode)
                 continue
-                
+
             processed = expr_str.replace('×', '*').replace('÷', '/').replace('−', '-')
             if '=' in processed:
-                res_lines, _ = solve_workspace_equation(expr_str, definitions, deg_mode=not self._context.radians_mode)
+                res_lines, _ = solve_workspace_equation(expr_str, definitions, deg_mode=deg_mode, precision=prec, eng=eng, fmt=fmt)
             else:
-                res_lines, _ = solve_workspace_expression_steps(expr_str, definitions, deg_mode=not self._context.radians_mode)
-                
-            block.widget.set_result(res_lines)
+                res_lines, _ = solve_workspace_expression_steps(expr_str, definitions, deg_mode=deg_mode, precision=prec, eng=eng, fmt=fmt)
+
+            block.widget.set_result(res_lines, wrap=wrap)
+
+            # Single-variable, non-equation expressions can be plotted (e.g. "sin(x)",
+            # or "a*x" once "a" is defined elsewhere in the workspace).
+            plot_var = (
+                free_symbol_for_plot(expr_str, deg_mode, known_names=definitions.keys())
+                if PLOT_AVAILABLE else None
+            )
+            block.widget.set_plot_context(plot_var, definitions, deg_mode)
             
         # 5. Auto-layout non-custom positioned blocks in a vertical stack to prevent overlaps on resize
         # This runs AFTER results are set, so we use the correct, updated card heights
@@ -594,11 +772,7 @@ class MainWindow(QMainWindow):
             block = workspace.blocks.pop()
             block.widget.setParent(None)
             block.widget.deleteLater()
-            
-        # Explicit garbage collection to release deleted widgets from memory
-        import gc
-        gc.collect()
-            
+
         # Reset the first block to empty at default coordinate (20, 20)
         first_block = workspace.blocks[0]
         first_block.expression = ""
@@ -626,9 +800,42 @@ class MainWindow(QMainWindow):
         clipboard.setText(result)
         
     def show_settings(self):
-        """Show settings configuration dialog."""
+        """Show settings configuration dialog, preloaded with the current state."""
+        self._settings_dialog.set_settings({
+            "precision": self._context.precision,
+            "radians_mode": self._context.radians_mode,
+            "result_format": self._context.result_format,
+        })
         self._settings_dialog.exec()
         
+    def show_function_reference(self):
+        """Show a reference of supported functions and constants (F1)."""
+        html = (
+            "<h3>Function Reference</h3>"
+            "<p><b>Arithmetic:</b> <code>+ - * / ^</code> (power), <code>!</code> (factorial), "
+            "<code>|x|</code> (absolute value), <code>%</code> (modulo)</p>"
+            "<p><b>Trigonometric:</b> sin cos tan cot sec csc and inverses "
+            "asin acos atan acot asec acsc (respects DEG/RAD)</p>"
+            "<p><b>Hyperbolic:</b> sinh cosh tanh coth sech csch and inverses "
+            "asinh acosh atanh</p>"
+            "<p><b>Exp / Log:</b> exp, ln / log (natural log), log10, log2, sqrt, cbrt</p>"
+            "<p><b>Calculus:</b> <code>diff(f, x)</code>, <code>integrate(f, x)</code>, "
+            "<code>integrate(f, (x, a, b))</code>, <code>limit(f, x, a)</code></p>"
+            "<p><b>Combinatorics:</b> factorial(n), binomial(n, k), gamma(x)</p>"
+            "<p><b>Number theory:</b> gcd(a, b), lcm(a, b), floor, ceil, sign, min, max</p>"
+            "<p><b>Constants:</b> pi (&pi;), e, phi (&phi;), tau (&tau;), euler (&gamma;), "
+            "i (imaginary unit), inf (&infin;)</p>"
+            "<p><b>Equations:</b> include an <code>=</code> to solve, e.g. "
+            "<code>x^2 - 4 = 0</code></p>"
+            "<p><b>Systems of equations:</b> separate with <code>;</code> to solve "
+            "together, e.g. <code>x + y = 5; x - y = 1</code></p>"
+            "<p><b>Plotting:</b> the 📈 button appears on any card with exactly one "
+            "undefined variable (e.g. <code>sin(x)</code>) &mdash; click to plot it.</p>"
+            "<p><b>Variables:</b> define in one card (<code>x = 5</code>) and reference it "
+            "in others &mdash; definitions propagate across the workspace.</p>"
+        )
+        QMessageBox.information(self, "Function Reference", html)
+
     def show_about(self):
         """Show standard calculator about message."""
         QMessageBox.about(
@@ -666,6 +873,10 @@ class MainWindow(QMainWindow):
         if "radians_mode" in settings:
             self._context.radians_mode = settings["radians_mode"]
             self._deg_btn.setText("RAD" if self._context.radians_mode else "DEG")
+        if "precision" in settings:
+            self._context.precision = int(settings["precision"])
+        if "result_format" in settings:
+            self._context.result_format = settings["result_format"]
         self.evaluate()
             
     def resizeEvent(self, event):

@@ -1,22 +1,25 @@
 """
-BigKuery Calculator - Arbitrary Precision Scientific Calculator
+BigKuery Calculator - Symbolic Scientific Calculator
 
-A powerful calculator supporting arbitrary precision arithmetic,
-symbolic math, and advanced mathematical functions.
+A calculator supporting symbolic math, equation rearranging/solving,
+step-by-step evaluation, and high-precision numeric results, powered by SymPy.
 """
 
 __version__ = "1.0.0"
 __author__ = "BigKuery"
 
-from bigkuery.core import BigFloat, BigRational, Evaluator, EvalContext
-from bigkuery.core.tokenizer import Tokenizer
-from bigkuery.core.parser import Parser
+from bigkuery.core import (
+    CalcContext,
+    solve_equation,
+    solve_workspace_equation,
+    solve_workspace_expression_steps,
+    sympy_to_html,
+)
 
 __all__ = [
-    "BigFloat",
-    "BigRational", 
-    "Evaluator",
-    "EvalContext",
-    "Tokenizer",
-    "Parser",
+    "CalcContext",
+    "solve_equation",
+    "solve_workspace_equation",
+    "solve_workspace_expression_steps",
+    "sympy_to_html",
 ]

@@ -22,5 +22,67 @@ share/python-wheels/
 MANIFEST
 
 .pytest_cache/
-.coverage
 htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local scratch / debug scripts
+scratch/
+
+# IDE / editor
+.vscode/
+.idea/
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Test and coverage reports
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# MyPy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Type checking artifacts
+.pytype/
+
+# Linting caches
+.ruff_cache/
+.pylint.d/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Documentation builds
+docs/_build/
+site/
+
+# Distribution / packaging artifacts
+*.whl
+
+# Environment variable files
+.env
+.env.*
+.envrc
+
+# Database files
+*.sqlite3
+*.db

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex/katex.min.css">
+<script src="katex/katex.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #root {
+    padding: 4px 2px;
+    font-family: Consolas, 'Courier New', monospace;
+    display: inline-block;
+  }
+  #root.wrap { display: block; max-width: 420px; }
+  .line { margin: 3px 0; white-space: nowrap; }
+  .line.wrapped { white-space: normal; overflow-wrap: anywhere; }
+  .step  { color: #79c0ff; }
+  .final { color: #56d364; font-weight: bold; }
+  .katex { font-size: 1.05em; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// Render an array of LaTeX strings. The last line is styled as the final answer.
+// When wrap is true, content is capped to a max width and wraps instead of
+// growing arbitrarily wide. Returns [width, height] so the host can self-size.
+function renderLines(lines, wrap) {
+  var root = document.getElementById('root');
+  root.innerHTML = '';
+  root.classList.toggle('wrap', !!wrap);
+  for (var i = 0; i < lines.length; i++) {
+    var div = document.createElement('div');
+    div.className = 'line ' + (i === lines.length - 1 ? 'final' : 'step') + (wrap ? ' wrapped' : '');
+    try {
+      katex.render(lines[i], div, { throwOnError: false, displayMode: false });
+    } catch (e) {
+      div.textContent = lines[i];
+    }
+    root.appendChild(div);
+  }
+  return [Math.ceil(root.scrollWidth), Math.ceil(root.scrollHeight)];
+}
+
+function measure() {
+  var root = document.getElementById('root');
+  return [Math.ceil(root.scrollWidth), Math.ceil(root.scrollHeight)];
+}
+</script>
+</body>
+</html>

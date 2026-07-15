@@ -2,12 +2,40 @@
 OutputDisplay -Whiteboard canvas viewport with draggable, inline-editable equation blocks.
 """
 
+import re
+
 from PyQt6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QPushButton, 
+    QFrame, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QPushButton,
     QScrollArea, QWidget, QSizePolicy, QGraphicsDropShadowEffect
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint
-from PyQt6.QtGui import QPainter, QColor, QFont, QCursor, QFontMetrics
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QByteArray
+from PyQt6.QtGui import QPainter, QColor, QFont, QCursor, QFontMetrics, QPixmap
+
+from .math_view import KATEX_AVAILABLE
+if KATEX_AVAILABLE:
+    from .math_view import MathView
+
+from bigkuery.core.plotting import PLOT_AVAILABLE, render_plot_png
+
+
+def _strip_markup(s: str) -> str:
+    """Reduce an HTML or LaTeX display line to readable plain text (for copy)."""
+    # HTML tags and a few entities
+    s = re.sub(r"<[^<]+?>", "", s)
+    for ent, ch in (("&times;", "×"), ("&rarr;", "→"), ("&pi;", "π"),
+                    ("&infin;", "∞"), ("&phi;", "φ"), ("&gamma;", "γ"),
+                    ("&minus;", "−"), ("&nbsp;", " ")):
+        s = s.replace(ent, ch)
+    # Common LaTeX constructs -> plain text
+    s = s.replace("\\left", "").replace("\\right", "")
+    s = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"(\1)/(\2)", s)
+    s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
+    s = s.replace("\\times", "×").replace("\\approx", "≈").replace("\\to", "→")
+    s = re.sub(r"\\(?:operatorname|text|mathrm)\s*\{([^{}]*)\}", r"\1", s)
+    s = re.sub(r"\\[a-zA-Z]+", "", s)        # drop remaining commands (\cos, \pi, …)
+    s = s.replace("\\{", "{").replace("\\}", "}")
+    s = s.replace("{", "").replace("}", "")
+    return s.strip()
 
 
 class EquationBlock(QFrame):
@@ -61,7 +89,28 @@ class EquationBlock(QFrame):
         header_layout.addWidget(self.index_label)
         
         header_layout.addStretch()
-        
+
+        self.plot_btn = QPushButton("\U0001F4C8")  # chart emoji
+        self.plot_btn.setFixedSize(20, 20)
+        self.plot_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.plot_btn.setToolTip("Show/hide plot")
+        self.plot_btn.setVisible(False)
+        self.plot_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #8b949e;
+                font-size: 12px;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #1a2d3d;
+                color: #4fc9b0;
+            }
+        """)
+        self.plot_btn.clicked.connect(self.toggle_plot)
+        header_layout.addWidget(self.plot_btn)
+
         self.delete_btn = QPushButton("×")
         self.delete_btn.setFixedSize(20, 20)
         self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -111,7 +160,23 @@ class EquationBlock(QFrame):
         self.steps_layout.setContentsMargins(5, 5, 5, 5)
         self.steps_layout.setSpacing(4)
         self.main_layout.addWidget(self.steps_widget)
-        
+
+        # KaTeX renderer (created lazily) and the last rendered lines (for copy).
+        self._math_view = None
+        self._result_lines = []
+        self._wrap = False
+
+        # Plot state: a chart toggle shown only for single-variable expressions.
+        # MainWindow keeps this up to date via set_plot_context() on every evaluate.
+        self.plot_label = QLabel()
+        self.plot_label.setVisible(False)
+        self.plot_label.setStyleSheet("background: transparent;")
+        self.main_layout.addWidget(self.plot_label)
+        self._plot_var = None
+        self._plot_defs = {}
+        self._plot_deg_mode = True
+        self._plot_visible = False
+
         self.adjustSize()
         
     def _on_text_changed(self, text):
@@ -150,39 +215,132 @@ class EquationBlock(QFrame):
                 }
             """)
             
+    def _clear_step_labels(self):
+        """Remove step QLabels but keep a persistent MathView, if present."""
+        for i in reversed(range(self.steps_layout.count())):
+            w = self.steps_layout.itemAt(i).widget()
+            if w is not None and w is not self._math_view:
+                w.setParent(None)
+                w.deleteLater()
+
     def set_empty(self):
-        while self.steps_layout.count():
-            item = self.steps_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        lbl = QLabel("[empty]")
-        lbl.setStyleSheet("color: #555555; font-style: italic; font-family: Consolas, monospace;")
-        self.steps_layout.addWidget(lbl)
-        
+        self._result_lines = []
+        if self._math_view is not None:
+            self._math_view.set_lines([])
+        else:
+            self._clear_step_labels()
+            lbl = QLabel("[empty]")
+            lbl.setStyleSheet("color: #555555; font-style: italic; font-family: Consolas, monospace;")
+            self.steps_layout.addWidget(lbl)
+
         # Reset constraints so that it can shrink back to default empty size
         self.setMinimumSize(150, 100)
         self.resize(150, 100)
         self._initial_size_set = False
         self.update_size()
-        
-    def set_result(self, html_lines):
-        while self.steps_layout.count():
-            item = self.steps_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-                 
+
+    # Width cap (px) applied to the content area when result_format is "wrap".
+    WRAP_MAX_WIDTH = 420
+
+    def set_result(self, lines, wrap=False):
+        self._result_lines = list(lines)
+        self._wrap = bool(wrap)
+        if KATEX_AVAILABLE:
+            self._set_result_katex(lines, self._wrap)
+        else:
+            self._set_result_html(lines, self._wrap)
+
+    def _ensure_math_view(self):
+        """Create the MathView on first use (keeps empty cards lightweight)."""
+        if self._math_view is None:
+            self._clear_step_labels()
+            self._math_view = MathView(self.steps_widget)
+            self._math_view.content_resized.connect(self._on_math_resized)
+            self.steps_layout.addWidget(self._math_view)
+        return self._math_view
+
+    def _on_math_resized(self, w, h):
+        self.update_size()
+
+    def _set_result_katex(self, latex_lines, wrap=False):
+        mv = self._ensure_math_view()
+        mv.set_lines(latex_lines, wrap=wrap)
+        self.update_size()
+
+    def _set_result_html(self, html_lines, wrap=False):
+        self._clear_step_labels()
+        width_style = f"max-width: {self.WRAP_MAX_WIDTH}px;" if wrap else ""
         for idx, line in enumerate(html_lines):
             lbl = QLabel()
             lbl.setTextFormat(Qt.TextFormat.RichText)
-            lbl.setWordWrap(False)
-            
+            lbl.setWordWrap(wrap)
+            if wrap:
+                # setFixedWidth (not just maximumWidth) forces Qt to actually
+                # reflow the text and report a wrapped sizeHint/heightForWidth;
+                # maximumWidth alone leaves sizeHint() reporting the unwrapped width.
+                lbl.setFixedWidth(self.WRAP_MAX_WIDTH)
+            else:
+                lbl.setMinimumWidth(0)
+                lbl.setMaximumWidth(16777215)  # Qt's QWIDGETSIZE_MAX: remove any prior cap
+
             # Rich colors: blue for steps, bold green for final answer
             if idx == len(html_lines) - 1:
-                lbl.setText(f"<div style='color: #56d364; font-weight: bold; font-family: Consolas, monospace; font-size: 14px;'>{line}</div>")
+                lbl.setText(f"<div style='color: #56d364; font-weight: bold; font-family: Consolas, monospace; font-size: 14px; {width_style}'>{line}</div>")
             else:
-                lbl.setText(f"<div style='color: #79c0ff; font-family: Consolas, monospace; font-size: 14px;'>{line}</div>")
-                
+                lbl.setText(f"<div style='color: #79c0ff; font-family: Consolas, monospace; font-size: 14px; {width_style}'>{line}</div>")
+
             self.steps_layout.addWidget(lbl)
+        self.update_size()
+
+    # --- Plotting ---------------------------------------------------------
+    def set_plot_context(self, var_name, definitions, deg_mode):
+        """Update what this card would plot. Called by MainWindow on every evaluate."""
+        self._plot_var = var_name
+        self._plot_defs = dict(definitions or {})
+        self._plot_deg_mode = deg_mode
+        self.plot_btn.setVisible(PLOT_AVAILABLE and var_name is not None)
+
+        if var_name is None:
+            if self._plot_visible:
+                self._hide_plot()
+        elif self._plot_visible:
+            self._render_plot()  # refresh an already-open plot with new context
+
+    def toggle_plot(self):
+        if self._plot_visible:
+            self._hide_plot()
+        else:
+            self._show_plot()
+
+    def _show_plot(self):
+        if self._plot_var is None:
+            return
+        self._render_plot()
+        self.plot_label.setVisible(True)
+        self._plot_visible = True
+        self.update_size()
+
+    def _hide_plot(self):
+        self.plot_label.setVisible(False)
+        self._plot_visible = False
+        self.update_size()
+
+    def _render_plot(self):
+        try:
+            png = render_plot_png(
+                self.get_expression(), self._plot_var,
+                definitions=self._plot_defs, deg_mode=self._plot_deg_mode,
+            )
+            pix = QPixmap()
+            pix.loadFromData(QByteArray(png), "PNG")
+            self.plot_label.setPixmap(pix)
+            self.plot_label.setFixedSize(pix.size())
+            self.plot_label.setText("")
+        except Exception as e:
+            self.plot_label.setPixmap(QPixmap())
+            self.plot_label.setText(f"Plot error: {e}")
+            self.plot_label.setStyleSheet("color: #f14c4c; background: transparent;")
+            self.plot_label.setFixedSize(self.plot_label.sizeHint())
         self.update_size()
 
     def update_size(self):
@@ -196,12 +354,20 @@ class EquationBlock(QFrame):
         self.input_edit.setMinimumWidth(input_width)
         
         # 2. Measure step labels width
+        # QLabel.sizeHint() reports the *unwrapped* preferred width regardless of
+        # any setFixedWidth()/setMaximumWidth() constraint (those are enforced by
+        # the layout engine, not reflected in sizeHint() itself). So in wrap mode,
+        # where labels are fixed-width, skip this measurement entirely and just
+        # use the wrap cap; only in scroll mode does the natural label width matter.
         max_step_width = 150
-        for i in range(self.steps_layout.count()):
-            widget = self.steps_layout.itemAt(i).widget()
-            if isinstance(widget, QLabel):
-                max_step_width = max(max_step_width, widget.sizeHint().width())
-                
+        if not self._wrap:
+            for i in range(self.steps_layout.count()):
+                widget = self.steps_layout.itemAt(i).widget()
+                if isinstance(widget, QLabel):
+                    max_step_width = max(max_step_width, widget.sizeHint().width())
+        elif self.steps_layout.count() > 0:
+            max_step_width = self.WRAP_MAX_WIDTH
+
         # 3. Apply width to card frame
         card_width = max(input_width + 25, max_step_width + 25)
         
@@ -340,7 +506,8 @@ class EquationBlock(QFrame):
 
 class CanvasWidget(QWidget):
     """
-    白板背景，绘制网格，支持通过鼠标拖拽移动视图（平移）。
+    Whiteboard background: draws the grid and supports panning the view by
+    click-dragging on empty space.
     """
     def __init__(self, parent_scroll_area):
         super().__init__()
@@ -350,20 +517,31 @@ class CanvasWidget(QWidget):
         self._start_v_val = 0
         self.setMinimumSize(3000, 3000)
         self.setStyleSheet("background-color: #1e1e1e;")
-        
+
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#1e1e1e"))
-        
-        # Draw grid
+
+        # Only repaint the exposed region. The canvas is 3000x3000, so drawing the
+        # full grid every paint would be ~240 long lines; clipping to event.rect()
+        # keeps painting proportional to what's actually visible.
+        rect = event.rect()
+        painter.fillRect(rect, QColor("#1e1e1e"))
+
         painter.setPen(QColor(50, 50, 50, 100))  # dark grey grid lines
         grid_size = 25
-        # Vertical
-        for x in range(0, self.width(), grid_size):
-            painter.drawLine(x, 0, x, self.height())
-        # Horizontal
-        for y in range(0, self.height(), grid_size):
-            painter.drawLine(0, y, self.width(), y)
+        left = rect.left() - (rect.left() % grid_size)
+        top = rect.top() - (rect.top() % grid_size)
+
+        x = left
+        while x <= rect.right():
+            painter.drawLine(x, rect.top(), x, rect.bottom())
+            x += grid_size
+
+        y = top
+        while y <= rect.bottom():
+            painter.drawLine(rect.left(), y, rect.right(), y)
+            y += grid_size
+
         painter.end()
         
     def mousePressEvent(self, event):
@@ -462,12 +640,6 @@ class OutputDisplay(QScrollArea):
         lines = []
         for block in blocks:
             lines.append(f"#{block.index + 1}: {block.get_expression()}")
-            for i in range(block.steps_layout.count()):
-                w = block.steps_layout.itemAt(i).widget()
-                if isinstance(w, QLabel):
-                    # Simple HTML tag stripping
-                    txt = w.text()
-                    import re
-                    clean_txt = re.sub('<[^<]+?>', '', txt)
-                    lines.append(f"  {clean_txt}")
+            for line in getattr(block, "_result_lines", []):
+                lines.append(f"  {_strip_markup(line)}")
         return "\n".join(lines)

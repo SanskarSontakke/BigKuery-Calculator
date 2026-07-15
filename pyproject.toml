@@ -26,7 +26,11 @@ classifiers = [
 
 dependencies = [
     "PyQt6>=6.4.0",
+    "PyQt6-WebEngine>=6.4.0",
+    "sympy>=1.12",
     "mpmath>=1.3.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +48,14 @@ bigkuery-gui = "bigkuery.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bigkuery*"]
+
+[tool.setuptools.package-data]
+"bigkuery.gui" = [
+    "assets/*.html",
+    "assets/katex/*.css",
+    "assets/katex/*.js",
+    "assets/katex/fonts/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
